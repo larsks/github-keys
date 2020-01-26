@@ -81,11 +81,15 @@ def main(verbose, github_users_file, github_cache_file,
                 LOG.debug('%s was not in cache', gh_user)
                 res = requests.get(url.format(gh_user=gh_user))
                 if res.status_code != 200:
+                    LOG.error('http status %s while trying to get keys for %s',
+                              res.status_code, gh_user)
                     keys = None
                 else:
                     keys = res.text
 
                 cache.set(gh_user, keys)
+            else:
+                LOG.debug('found %s in cache', gh_user)
 
             if keys is None:
                 LOG.warning('failed to get ssh keys for %s', gh_user)
