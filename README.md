@@ -12,3 +12,12 @@ EOF
 ```
 
 `github-keys` caches both positive and negative results in order to avoid repeated requests to GitHub. You can adjust the cache expiration time on the command line.
+
+## Example sshd configuration
+
+```
+AuthorizedKeysCommand /usr/local/bin/github-keys %u
+AuthorizedKeysCommandUser root
+```
+
+This tool does need to run as `root` in order to access the `github_users` file for each user.
