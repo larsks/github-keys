@@ -1,0 +1,103 @@
+#!/usr/bin/python3
+
+import click
+import dogpile.cache
+import logging
+import os
+import pwd
+import requests
+import sys
+
+from pathlib import Path
+
+LOG = logging.getLogger(__name__)
+DEFAULT_URL = 'https://github.com/{gh_user}.keys'
+DEFAULT_CACHE_EXPIRATION_TIME = 600
+
+
+def become_user(pwent):
+    os.setegid(pwent.pw_gid)
+    os.seteuid(pwent.pw_uid)
+
+
+@click.command()
+@click.option('-v', '--verbose',
+              count=True)
+@click.option('-f', '--github-users-file',
+              type=Path)
+@click.option('-c', '--github-cache-file',
+              type=Path)
+@click.option('-x', '--cache-expiration-time',
+              default=DEFAULT_CACHE_EXPIRATION_TIME)
+@click.option('--url',
+              default=DEFAULT_URL)
+@click.argument('user')
+def main(verbose, github_users_file, github_cache_file,
+         cache_expiration_time, url, user):
+    try:
+        loglevel = [logging.WARNING, logging.INFO, logging.DEBUG][verbose]
+    except IndexError:
+        loglevel = logging.DEBUG
+
+    logging.basicConfig(level=loglevel)
+
+    pwent = pwd.getpwnam(user)
+    if os.geteuid() == 0:
+        LOG.info('switching to %s', user)
+        become_user(pwent)
+
+    homedir = Path(pwent.pw_dir)
+
+    if github_users_file is None:
+        github_users_file = homedir / '.ssh' / 'github_users'
+
+    if github_cache_file is None:
+        github_cache_file = homedir / '.ssh' / '.github_users_cache'
+
+    LOG.debug('using users file: %s', github_users_file)
+    LOG.debug('using cache file: %s', github_cache_file)
+
+    cache = dogpile.cache.make_region().configure(
+        'dogpile.cache.dbm',
+        expiration_time=cache_expiration_time,
+        arguments=dict(filename=str(github_cache_file)))
+
+    if not github_users_file.is_file():
+        LOG.warning('no github_users_file file')
+        return
+
+    with github_users_file.open('r') as fd:
+        for line in fd:
+            if line.startswith('#'):
+                continue
+
+            gh_user = line.strip()
+            if not gh_user:
+                continue
+
+            LOG.debug('looking up %s', gh_user)
+            keys = cache.get(gh_user)
+            if keys is dogpile.cache.api.NO_VALUE:
+                LOG.debug('%s was not in cache', gh_user)
+                res = requests.get(url.format(gh_user=gh_user))
+                if res.status_code != 200:
+                    keys = None
+                else:
+                    keys = res.text
+
+                cache.set(gh_user, keys)
+
+            if keys is None:
+                LOG.warning('failed to get ssh keys for %s', gh_user)
+                continue
+
+            if not keys:
+                LOG.warning('user %s has no keys', gh_user)
+                continue
+
+            LOG.info('found keys for user %s', gh_user)
+            sys.stdout.write(keys)
+
+
+if __name__ == '__main__':
+    main()
